@@ -105,8 +105,16 @@ class DecisionEngineTest {
     @Test
     void testNoValidLoanFound() {
         assertThrows(NoValidLoanException.class,
-                () -> decisionEngine.calculateApprovedLoan(debtorPersonalCode, 10000L, 60));
+                () -> decisionEngine.calculateApprovedLoan(debtorPersonalCode, 10000L, 48));
     }
 
+    @Test
+    void testMaximumAmountForSegment3() throws InvalidLoanAmountException, InvalidLoanPeriodException, InvalidPersonalCodeException, NoValidLoanException {
+        // Credit modifier = 1000
+        // For 8000€, 12 months: ((1000/8000)*12)/10 = 0.15 > 0.1
+        // Max amount is 10000€ (capped by maximum loan amount)
+        Decision decision = decisionEngine.calculateApprovedLoan(segment3PersonalCode, 8000L, 12);
+        assertEquals(10000, decision.getLoanAmount());
+        assertEquals(12, decision.getLoanPeriod());
+    }
 }
-
