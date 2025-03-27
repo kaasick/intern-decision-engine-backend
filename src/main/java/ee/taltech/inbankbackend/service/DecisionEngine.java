@@ -1,5 +1,6 @@
 package ee.taltech.inbankbackend.service;
 
+import com.github.vladislavgoltjajev.personalcode.exception.PersonalCodeException;
 import com.github.vladislavgoltjajev.personalcode.locale.estonia.EstonianPersonalCodeValidator;
 import ee.taltech.inbankbackend.config.DecisionEngineConstants;
 import ee.taltech.inbankbackend.exceptions.InvalidLoanAmountException;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Period;
 
 /**
  * A service class that provides a method for calculating an approved loan amount and period for a customer.
@@ -23,6 +25,11 @@ public class DecisionEngine {
     private final EstonianPersonalCodeValidator validator = new EstonianPersonalCodeValidator();
     private static final BigDecimal CREDIT_SCORE_THRESHOLD = new BigDecimal("0.1");
     private static final BigDecimal TEN = new BigDecimal("10");
+
+    private static final int MIN_AGE = 18;
+    private static final int LIFE_EXPECTANCY = 80;
+    private static final int MAX_AGE = LIFE_EXPECTANCY - (DecisionEngineConstants.MAXIMUM_LOAN_PERIOD / 12);
+
 
     /**
      * Calculates the maximum loan amount and period for the customer based on their ID code,
@@ -45,37 +52,46 @@ public class DecisionEngine {
 
         try {
             verifyInputs(personalCode, loanAmount, loanPeriod);
+            validateAge(personalCode); // Simplified age check
         } catch (Exception e) {
             return new Decision(null, null, e.getMessage());
         }
 
         int creditModifier = getCreditModifier(personalCode);
-
         if (creditModifier == 0) {
-            throw new NoValidLoanException("No valid loan found!");
+            throw new NoValidLoanException("No valid loan found due to credit segment!");
         }
 
-        // Find maximum valid loan amount for the requested period
         int maxValidAmount = findMaximumValidLoanAmount(creditModifier, loanPeriod);
-
-        // If a valid amount was found, return it
         if (maxValidAmount >= DecisionEngineConstants.MINIMUM_LOAN_AMOUNT) {
             return new Decision(maxValidAmount, loanPeriod, null);
         }
 
-        // If no valid amount within the requested period, try to find a suitable period
         int adjustedPeriod = findSuitablePeriod(creditModifier);
-
-        // If no suitable period found within the allowed range
-        if (adjustedPeriod == -1) {
-            throw new NoValidLoanException("No valid loan found for any period!");
+        if (adjustedPeriod != -1) {
+            maxValidAmount = findMaximumValidLoanAmount(creditModifier, adjustedPeriod);
+            return new Decision(maxValidAmount, adjustedPeriod,
+                    "Adjusted period from " + loanPeriod + " to " + adjustedPeriod + " months for eligibility");
         }
 
-        // Calculate maximum amount for the adjusted period
-        maxValidAmount = findMaximumValidLoanAmount(creditModifier, adjustedPeriod);
+        throw new NoValidLoanException("No valid loan found for any period!");
+    }
 
-        // Return this new amount for the found adjusted period
-        return new Decision(maxValidAmount, adjustedPeriod, null);
+    private void validateAge(String personalCode)
+            throws InvalidPersonalCodeException, NoValidLoanException {
+        try {
+            Period agePeriod = AgeValidator.getAge(personalCode);
+            int ageInYears = agePeriod.getYears();
+
+            if (ageInYears < MIN_AGE) {
+                throw new NoValidLoanException("Customer is too young for a loan (minimum age: " + MIN_AGE + ")");
+            }
+            if (ageInYears > MAX_AGE) {
+                throw new NoValidLoanException("Customer exceeds maximum age limit (" + MAX_AGE + ")");
+            }
+        } catch (PersonalCodeException e) {
+            throw new InvalidPersonalCodeException("Error processing personal code: " + e.getMessage());
+        }
     }
 
     /**
@@ -112,7 +128,7 @@ public class DecisionEngine {
      * Uses binary search (O(log n)).
      *
      * @param creditModifier The customer's credit modifier based on their segment
-     * @param loanPeriod The loan period in months
+     * @param loanPeriod     The loan period in months
      * @return The maximum loan amount that can be approved, or 0 if no valid amount is found
      */
     private int findMaximumValidLoanAmount(int creditModifier, int loanPeriod) {
